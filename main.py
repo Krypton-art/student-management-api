@@ -1,5 +1,10 @@
-from fastapi import FastAPI, HTTPException , status
-from pydantic import BaseModel , Field
+from fastapi import FastAPI, HTTPException, Depends, status
+from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from database import get_db
+from models import Student as StudentModel
 
 app = FastAPI()
 
@@ -9,14 +14,14 @@ class StudentCreate(BaseModel):
     age: int = Field(gt=0, lt=100)
     branch: str
 
+
 class StudentResponse(BaseModel):
     id: int
     name: str
     age: int
     branch: str
 
-students = []
-next_student_id = 1
+    model_config = {"from_attributes": True}
 
 
 @app.get("/")
@@ -29,67 +34,102 @@ def home():
     status_code=status.HTTP_201_CREATED,
     response_model=StudentResponse
 )
-def create_student(student: StudentCreate):
-    global next_student_id
+def create_student(
+    student: StudentCreate,
+    db: Session = Depends(get_db)
+):
+    new_student = StudentModel(
+        name=student.name,
+        age=student.age,
+        branch=student.branch
+    )
 
-    student_data = student.model_dump()
-    student_data["id"] = next_student_id
+    db.add(new_student)
+    db.commit()
+    db.refresh(new_student)
 
-    students.append(student_data)
-    next_student_id += 1
-
-    return student_data
+    return new_student
 
 
-@app.get("/students/{student_id}", response_model=StudentResponse)
-def get_student(student_id: int):
-    for student in students:
-        if student["id"] == student_id:
-            return student
-
-    raise HTTPException(
-    status_code=status.HTTP_404_NOT_FOUND,
-    detail="Student not found"
+@app.get(
+    "/students",
+    response_model=list[StudentResponse]
 )
+def get_students(
+    branch: str | None = None,
+    db: Session = Depends(get_db)
+):
+    statement = select(StudentModel)
 
-@app.get("/students", response_model=list[StudentResponse])
-def get_students(branch: str | None = None):
     if branch:
-        return [student for student in students if student["branch"] == branch]
+        statement = statement.where(
+            StudentModel.branch == branch
+        )
 
-    return students
+    return db.scalars(statement).all()
+
+
+@app.get(
+    "/students/{student_id}",
+    response_model=StudentResponse
+)
+def get_student(
+    student_id: int,
+    db: Session = Depends(get_db)
+):
+    student = db.get(StudentModel, student_id)
+
+    if not student:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Student not found"
+        )
+
+    return student
 
 @app.put(
     "/students/{student_id}",
     response_model=StudentResponse
 )
-def update_student(student_id: int, student: StudentCreate):
+def update_student(
+    student_id: int,
+    student: StudentCreate,
+    db: Session = Depends(get_db)
+):
+    existing_student = db.get(StudentModel, student_id)
 
-    for existing_student in students:
-        if existing_student["id"] == student_id:
+    if not existing_student:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Student not found"
+        )
 
-            existing_student["name"] = student.name
-            existing_student["age"] = student.age
-            existing_student["branch"] = student.branch
+    existing_student.name = student.name
+    existing_student.age = student.age
+    existing_student.branch = student.branch
 
-            return existing_student
+    db.commit()
+    db.refresh(existing_student)
 
-    raise HTTPException(
-        status_code=404,
-        detail="Student not found"
-    )
+    return existing_student
 
 @app.delete(
     "/students/{student_id}",
     status_code=status.HTTP_204_NO_CONTENT
 )
-def delete_student(student_id: int):
-    for index, student in enumerate(students):
-        if student["id"] == student_id:
-            students.pop(index)
-            return
+def delete_student(
+    student_id: int,
+    db: Session = Depends(get_db)
+):
+    student = db.get(StudentModel, student_id)
 
-    raise HTTPException(
-        status_code=status.HTTP_404_NOT_FOUND,
-        detail="Student not found"
-    )
+    if not student:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Student not found"
+        )
+
+    db.delete(student)
+    db.commit()
+
+    return
