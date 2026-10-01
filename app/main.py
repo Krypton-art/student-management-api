@@ -9,7 +9,10 @@ app = FastAPI(
 )
 
 
-@app.get("/")
+@app.get(
+    "/",
+    response_model=dict[str, str]
+)
 def home():
     return {"message": "Student Management API"}
 
